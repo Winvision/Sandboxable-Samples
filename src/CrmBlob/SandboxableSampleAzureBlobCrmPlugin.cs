@@ -37,7 +37,7 @@ namespace Sandboxable.Samples.Crm.Blob
             this.secureString = secureString;
         }
 
-        public async void Execute(IServiceProvider serviceProvider)
+        public void Execute(IServiceProvider serviceProvider)
         {
             // Extract the tracing service for use in debugging sandboxed plug-ins
             ITracingService tracingService = (ITracingService)serviceProvider.GetService(typeof(ITracingService));
@@ -51,6 +51,7 @@ namespace Sandboxable.Samples.Crm.Blob
 
             // Get user name
             Entity userEntity = organizationService.Retrieve("systemuser", context.InitiatingUserId, new ColumnSet("fullname"));
+            string fullName = userEntity.GetAttributeValue<string>("fullname");
 
             if (context.PreEntityImages.ContainsKey("Target"))
             {
@@ -69,38 +70,36 @@ namespace Sandboxable.Samples.Crm.Blob
 
                     // Make sure our root sample directory exists
                     CloudBlobContainer container = blobClient.GetContainerReference(FolderName.ToLowerInvariant());
-                    await container.CreateIfNotExistsAsync();
+                    container.CreateIfNotExists();
 
-                    // Make sure there is a container for this specific entity
+                    // Get a directory reference for this specific entity
                     CloudBlobDirectory entityDirectory = container.GetDirectoryReference(entity.LogicalName.ToLowerInvariant());
-                    await entityDirectory.Container.CreateIfNotExistsAsync();
                     
-                    string fullName = userEntity.GetAttributeValue<string>("fullname");
+                    // Get a reference to the blob
+                    string fileName = entity.Id.ToString("N").ToUpperInvariant() + ".json";
+                    CloudBlockBlob blob = entityDirectory.GetBlockBlobReference(fileName);
 
-                    // Create a message to store at the queue
-                    var messageData = new
+                    // Set properties
+                    blob.Properties.ContentType = "application/json";
+
+                    // Add metadata
+                    blob.Metadata["userid"] = context.UserId.ToString("B").ToLowerInvariant();
+                    blob.Metadata["userfullname"] = fullName;
+                    blob.Metadata["deletiondate"] = context.OperationCreatedOn.ToString("O");
+
+                    // Create the file content to store in the blob
+                    var blobData = new
                     {
                         context.UserId,
-                        fullName,
+                        FullName = fullName,
                         context.MessageName,
                         entity.LogicalName,
                         entity.Id,
                         entity.Attributes
                     };
 
-                    // Get a reference to the blob
-                    CloudBlockBlob blob = entityDirectory.GetBlockBlobReference(entity.Id.ToString("N").ToUpperInvariant() + ".json");
-
-                    // Set properties
-                    blob.Properties.ContentType = "application/json";
-
-                    // Add metadata
-                    blob.Metadata["User_ID"] = context.UserId.ToString("B").ToLowerInvariant();
-                    blob.Metadata["User_Fullname"] = fullName;
-                    blob.Metadata["Deletion_Date"] = context.OperationCreatedOn.ToString("O");
-
                     // Upload the content
-                    await blob.UploadTextAsync(JsonConvert.SerializeObject(messageData, Formatting.Indented));
+                    blob.UploadText(JsonConvert.SerializeObject(blobData, Formatting.Indented));
                 }
                 catch (FaultException<OrganizationServiceFault> exception)
                 {
@@ -108,7 +107,7 @@ namespace Sandboxable.Samples.Crm.Blob
                 }
                 catch (Exception exception)
                 {
-                    tracingService.Trace("Sandboxable Sample Azure Blob CRM Plugin: {0}", exception.ToString());
+                    tracingService.Trace($"Sandboxable Sample Azure Blob CRM Plugin: {exception}");
                     throw;
                 }
             }
